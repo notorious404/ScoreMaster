@@ -1,0 +1,10 @@
+{
+  "name": "ScoreMaster Cricket Scoring",
+  "short_name": "ScoreMaster",
+  "description": "Offline-first cricket scoring and scorecard app",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#101b2d",
+  "theme_color": "#101b2d",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
