@@ -4,7 +4,7 @@ import {
   Activity, BarChart3, BookOpen, Check, ChevronLeft, ChevronRight, CircleHelp,
   Dices, Download, History, Moon, Plus, RotateCw, Settings, Shield, Sun, Trophy,
   Undo2, Users, WifiOff, X, Crown, Sparkles, Award, Zap, Target, Flame,
-  Printer, Share2, FileText, Home, Play, XCircle, Trash2, ShieldCheck
+  Printer, Share2, FileText, Home, Play, XCircle, Trash2, ShieldCheck, Pin, PinOff
 } from 'lucide-react'
 import './styles.css'
 
@@ -60,6 +60,7 @@ type Match = {
   activeBowlerId?: string
   deliveries: Delivery[]
   isCompleted?: boolean
+  isPinned?: boolean
   createdAt: number
 }
 
@@ -90,21 +91,20 @@ const seedPlayers = (prefix: string, count = 11): Player[] => Array.from({ lengt
   role: i === 0 ? 'Batter' : i === 1 ? 'Wicketkeeper' : i < 6 ? 'Batter' : i < 8 ? 'All-rounder' : 'Bowler'
 }))
 
-const starterMatch = (): Match => {
-  const teamA: Team = { id: 'team-a', name: 'Royal Strikers', players: seedPlayers('Royal', 11), captainId: 'Royal-1' }
-  const teamB: Team = { id: 'team-b', name: 'Super Kings', players: seedPlayers('Super', 11), captainId: 'Super-1' }
+const blankMatch = (): Match => {
+  const teamA: Team = { id: 'team-a', name: 'Team 1', players: seedPlayers('Team1', 11), captainId: 'Team1-1' }
+  const teamB: Team = { id: 'team-b', name: 'Team 2', players: seedPlayers('Team2', 11), captainId: 'Team2-1' }
   return {
     id: crypto.randomUUID(),
-    name: 'Sunday Super Clash',
-    tournament: 'Premier Champions Trophy',
-    venue: 'National Cricket Arena',
+    name: 'New Cricket Match',
+    tournament: 'Tournament',
+    venue: 'Main Ground',
     date: new Date().toISOString().slice(0, 10),
     overs: 20,
     ballType: 'White Ball',
     matchType: 'T20 Match',
     teams: [teamA, teamB],
     battingFirst: 0,
-    toss: { caller: 'team-a', call: 'Heads', result: 'Heads', winnerId: 'team-a', decision: 'bat' },
     rules: {
       countWideExtra: true,
       countNoBallExtra: true,
@@ -125,11 +125,37 @@ function getPlayerNameWithCaptain(player: Player, team: Team) {
 }
 
 function replayInnings(match: Match, inningsNum: 1 | 2): Snapshot {
-  const deliveries = match.deliveries.filter(d => (d.innings ?? 1) === inningsNum)
-  const battingTeamIdx = inningsNum === 1 ? match.battingFirst : ((1 - match.battingFirst) as 0 | 1)
-  const battingTeam = match.teams[battingTeamIdx]
-  const bowlingTeam = match.teams[1 - battingTeamIdx]
-  const openers = match.openers[inningsNum]
+  const emptySnap: Snapshot = {
+    runs: 0,
+    wickets: 0,
+    legalBalls: 0,
+    currentOver: 1,
+    ballInOver: 0,
+    batters: {},
+    bowlers: {},
+    extras: { wide: 0, noBall: 0, bye: 0, legBye: 0, penalty: 0 },
+    partnerships: [],
+    currentPair: { striker: 'p1', nonStriker: 'p2' },
+    currentBowlerId: 'b1',
+    overs: [],
+    isFreeHit: false,
+    isCompleted: false
+  }
+
+  if (!match || !Array.isArray(match.teams) || match.teams.length < 2) return emptySnap
+
+  const deliveries = (match.deliveries || []).filter(d => (d?.innings ?? 1) === inningsNum)
+  const battingFirst = match.battingFirst ?? 0
+  const battingTeamIdx = inningsNum === 1 ? battingFirst : ((1 - battingFirst) as 0 | 1)
+  const battingTeam = match.teams[battingTeamIdx] ?? match.teams[0]
+  const bowlingTeam = match.teams[1 - battingTeamIdx] ?? match.teams[1]
+  if (!battingTeam || !bowlingTeam) return emptySnap
+
+  const openers = match.openers ? match.openers[inningsNum] : undefined
+
+  const p1 = battingTeam.players?.[0]?.id ?? 'p1'
+  const p2 = battingTeam.players?.[1]?.id ?? 'p2'
+  const b1 = bowlingTeam.players?.[0]?.id ?? 'b1'
 
   const batters: Record<string, BatterStat> = {}
   const bowlers: Snapshot['bowlers'] = {}
@@ -140,19 +166,20 @@ function replayInnings(match: Match, inningsNum: 1 | 2): Snapshot {
   let legalBalls = 0
   const overs: Snapshot['overs'] = []
 
-  let pair = openers
+  let pair = (openers && openers.striker && openers.nonStriker)
     ? { striker: openers.striker, nonStriker: openers.nonStriker }
-    : { striker: battingTeam.players[0]?.id ?? 'p1', nonStriker: battingTeam.players[1]?.id ?? 'p2' }
+    : { striker: p1, nonStriker: p2 }
 
-  let currentBowlerId = openers?.bowler ?? bowlingTeam.players[0]?.id ?? 'b1'
+  let currentBowlerId = openers?.bowler ?? b1
   let isFreeHit = false
 
   for (const d of deliveries) {
+    if (!d || !d.striker || !d.bowler) continue
     currentBowlerId = d.bowler
     const batter = batters[d.striker] ??= { runs: 0, balls: 0, fours: 0, sixes: 0, dots: 0 }
     const bowler = bowlers[d.bowler] ??= { balls: 0, runs: 0, wickets: 0, wides: 0, noBalls: 0 }
     const legal = !d.extraType || !['wide', 'noBall', 'penalty'].includes(d.extraType)
-    const teamRuns = d.batterRuns + d.extras
+    const teamRuns = (d.batterRuns ?? 0) + (d.extras ?? 0)
     runs += teamRuns
     legalBalls += legal ? 1 : 0
 
@@ -163,13 +190,13 @@ function replayInnings(match: Match, inningsNum: 1 | 2): Snapshot {
       bowler.wides++
     }
 
-    batter.runs += d.batterRuns
+    batter.runs += d.batterRuns ?? 0
     batter.fours += d.batterRuns === 4 ? 1 : 0
     batter.sixes += d.batterRuns === 6 ? 1 : 0
-    batter.dots += d.batterRuns === 0 && d.extras === 0 ? 1 : 0
+    batter.dots += d.batterRuns === 0 && (d.extras ?? 0) === 0 ? 1 : 0
 
-    if (d.extraType) extras[d.extraType] = (extras[d.extraType] ?? 0) + d.extras
-    bowler.runs += d.batterRuns + (d.extraType === 'bye' || d.extraType === 'legBye' ? 0 : d.extras)
+    if (d.extraType) extras[d.extraType] = (extras[d.extraType] ?? 0) + (d.extras ?? 0)
+    bowler.runs += (d.batterRuns ?? 0) + (d.extraType === 'bye' || d.extraType === 'legBye' ? 0 : (d.extras ?? 0))
     if (d.extraType === 'noBall') bowler.noBalls++
 
     const partnershipKey = [d.striker, d.nonStriker].sort().join('|')
@@ -192,18 +219,20 @@ function replayInnings(match: Match, inningsNum: 1 | 2): Snapshot {
     over.runs += teamRuns
     if (!overs.includes(over)) overs.push(over)
 
-    const totalRuns = d.batterRuns + d.extras
+    const totalRuns = (d.batterRuns ?? 0) + (d.extras ?? 0)
     if (totalRuns % 2 === 1) pair = { striker: pair.nonStriker, nonStriker: pair.striker }
     if (legal && d.ball === 6) pair = { striker: pair.nonStriker, nonStriker: pair.striker }
 
-    if (d.extraType === 'noBall' && match.rules.freeHitOnNoBall) {
+    if (d.extraType === 'noBall' && match.rules?.freeHitOnNoBall) {
       isFreeHit = true
     } else if (legal) {
       isFreeHit = false
     }
   }
 
-  const isCompleted = legalBalls >= match.overs * 6 || wickets >= Math.max(1, battingTeam.players.length - 1)
+  const maxOvers = match.overs ?? 20
+  const maxWickets = Math.max(1, (battingTeam.players?.length ?? 11) - 1)
+  const isCompleted = legalBalls >= maxOvers * 6 || wickets >= maxWickets
 
   return {
     runs,
@@ -224,36 +253,39 @@ function replayInnings(match: Match, inningsNum: 1 | 2): Snapshot {
 }
 
 function getMatchState(match: Match) {
-  const snap1 = replayInnings(match, 1)
-  const snap2 = replayInnings(match, 2)
+  const safeMatch = match && Array.isArray(match.teams) && match.teams.length === 2 ? match : blankMatch()
+  const snap1 = replayInnings(safeMatch, 1)
+  const snap2 = replayInnings(safeMatch, 2)
 
-  const team1Idx = match.battingFirst
-  const team2Idx = (1 - match.battingFirst) as 0 | 1
-  const team1 = match.teams[team1Idx]
-  const team2 = match.teams[team2Idx]
+  const team1Idx = safeMatch.battingFirst ?? 0
+  const team2Idx = (1 - team1Idx) as 0 | 1
+  const team1 = safeMatch.teams[team1Idx]
+  const team2 = safeMatch.teams[team2Idx]
 
   const target = snap1.runs + 1
 
-  let isMatchCompleted = Boolean(match.isCompleted)
+  let isMatchCompleted = Boolean(safeMatch.isCompleted)
   let winnerMessage = ''
   let winnerTeam: Team | null = null
 
-  if (match.isCompleted || match.currentInnings === 2) {
+  const currentInnings = safeMatch.currentInnings ?? 1
+
+  if (safeMatch.isCompleted || currentInnings === 2) {
     if (snap2.runs >= target) {
       isMatchCompleted = true
       winnerTeam = team2
-      const wicketsLeft = (team2.players.length - 1) - snap2.wickets
-      winnerMessage = `${team2.name} won by ${wicketsLeft} wicket${wicketsLeft === 1 ? '' : 's'}!`
-    } else if (snap2.isCompleted || match.isCompleted) {
+      const wicketsLeft = ((team2?.players?.length ?? 11) - 1) - snap2.wickets
+      winnerMessage = `${team2?.name ?? 'Team 2'} won by ${wicketsLeft} wicket${wicketsLeft === 1 ? '' : 's'}!`
+    } else if (snap2.isCompleted || safeMatch.isCompleted) {
       isMatchCompleted = true
       if (snap2.runs < snap1.runs) {
         winnerTeam = team1
         const runDiff = snap1.runs - snap2.runs
-        winnerMessage = `${team1.name} won by ${runDiff} run${runDiff === 1 ? '' : 's'}!`
+        winnerMessage = `${team1?.name ?? 'Team 1'} won by ${runDiff} run${runDiff === 1 ? '' : 's'}!`
       } else if (snap2.runs > snap1.runs) {
         winnerTeam = team2
-        const wicketsLeft = (team2.players.length - 1) - snap2.wickets
-        winnerMessage = `${team2.name} won by ${wicketsLeft} wicket${wicketsLeft === 1 ? '' : 's'}!`
+        const wicketsLeft = ((team2?.players?.length ?? 11) - 1) - snap2.wickets
+        winnerMessage = `${team2?.name ?? 'Team 2'} won by ${wicketsLeft} wicket${wicketsLeft === 1 ? '' : 's'}!`
       } else {
         winnerMessage = `Match Tied! Both teams scored ${snap1.runs} runs.`
       }
@@ -267,7 +299,7 @@ function getMatchState(match: Match) {
     isMatchCompleted,
     winnerMessage,
     winnerTeam,
-    currentSnap: match.currentInnings === 1 ? snap1 : snap2
+    currentSnap: currentInnings === 1 ? snap1 : snap2
   }
 }
 
@@ -541,6 +573,15 @@ const db = {
       tx.oncomplete = () => resolve()
     }
   }),
+  clearAll: () => new Promise<void>(resolve => {
+    const request = indexedDB.open('scoremaster', 1)
+    request.onupgradeneeded = () => request.result.createObjectStore('matches', { keyPath: 'id' })
+    request.onsuccess = () => {
+      const tx = request.result.transaction('matches', 'readwrite')
+      tx.objectStore('matches').clear()
+      tx.oncomplete = () => resolve()
+    }
+  }),
   load: () => new Promise<Match[]>((resolve) => {
     const request = indexedDB.open('scoremaster', 1)
     request.onupgradeneeded = () => request.result.createObjectStore('matches', { keyPath: 'id' })
@@ -630,7 +671,7 @@ function ConfettiCanvas() {
 }
 
 function App() {
-  const [match, setMatch] = useState<Match>(() => starterMatch())
+  const [match, setMatch] = useState<Match>(() => blankMatch())
   const [view, setView] = useState<'home' | 'live' | 'scorecard' | 'analytics' | 'history' | 'settings'>('home')
   const [undo, setUndo] = useState<Match[]>([])
   const [redo, setRedo] = useState<Match[]>([])
@@ -642,6 +683,10 @@ function App() {
   const [flash, setFlash] = useState('')
   const [dark, setDark] = useState(false)
   const [matches, setMatches] = useState<Match[]>([])
+
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [isInstalled, setIsInstalled] = useState(false)
+  const [showInstallModal, setShowInstallModal] = useState(false)
 
   const matchState = useMemo(() => getMatchState(match), [match])
   const { snap1, snap2, target, isMatchCompleted, winnerMessage, currentSnap } = matchState
@@ -662,12 +707,58 @@ function App() {
   const showInnings1Summary = match.currentInnings === 1 && snap1.isCompleted && !isMatchCompleted
 
   useEffect(() => {
-    db.load().then(setMatches).catch(() => undefined)
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault()
+      setDeferredPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall)
+    window.addEventListener('appinstalled', () => {
+      setIsInstalled(true)
+      setDeferredPrompt(null)
+    })
+
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsInstalled(true)
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
+    }
+  }, [])
+
+  const handleInstallApp = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt()
+      const choice = await deferredPrompt.userChoice
+      if (choice.outcome === 'accepted') {
+        setIsInstalled(true)
+      }
+      setDeferredPrompt(null)
+    } else {
+      setShowInstallModal(true)
+    }
+  }
+
+  useEffect(() => {
+    db.load().then(loaded => {
+      const realMatches = loaded.filter(m => m.name !== 'Sunday Super Clash')
+      if (realMatches.length !== loaded.length) {
+        db.clearAll().then(() => {
+          realMatches.forEach(m => db.save(m))
+        }).catch(() => undefined)
+      }
+      setMatches(realMatches)
+      if (realMatches.length > 0) {
+        setMatch(realMatches[0])
+      }
+    }).catch(() => undefined)
   }, [])
 
   useEffect(() => {
-    db.save(match).catch(() => undefined)
-  }, [match])
+    if (match.deliveries.length > 0 || matches.some(m => m.id === match.id)) {
+      db.save(match).catch(() => undefined)
+    }
+  }, [match, matches])
 
   useEffect(() => {
     if (flash) {
@@ -776,6 +867,26 @@ function App() {
     setFlash('Match deleted')
   }
 
+  const handleTogglePin = (id: string) => {
+    setMatches(history => history.map(m => {
+      if (m.id === id) {
+        const updated = { ...m, isPinned: !m.isPinned }
+        db.save(updated).catch(() => undefined)
+        return updated
+      }
+      return m
+    }))
+    if (match.id === id) {
+      setMatch(m => ({ ...m, isPinned: !m.isPinned }))
+    }
+  }
+
+  const handleClearAllMatches = async () => {
+    await db.clearAll()
+    setMatches([])
+    setFlash('Match history cleared')
+  }
+
   const undoLast = () => {
     const previous = undo.at(-1)
     if (!previous) return
@@ -805,6 +916,8 @@ function App() {
 
   const currentPairNames = [getBatterDisplayName(currentSnap.currentPair.striker), getBatterDisplayName(currentSnap.currentPair.nonStriker)]
 
+  const hasActiveDeliveries = match.deliveries.length > 0
+
   return (
     <div className={dark ? 'app dark' : 'app'}>
       <header className="topbar">
@@ -816,6 +929,9 @@ function App() {
           </div>
         </div>
         <div className="top-actions">
+          <button className="primary-subtle icon-btn-text install-btn" onClick={handleInstallApp}>
+            <Download size={15} /> {isInstalled ? 'App Installed' : 'Install App'}
+          </button>
           <span className="offline"><WifiOff size={15} /> Offline Ready</span>
           <button className="primary" style={{ padding: '8px 16px' }} onClick={() => { setShowSetup(true); setShowCelebration(true) }}>
             <Plus size={16} /> Start Match
@@ -829,10 +945,10 @@ function App() {
       <div className="shell">
         <aside className="sidebar">
           <div className="match-chip">
-            <div className="live-dot" />
+            <div className={hasActiveDeliveries ? "live-dot" : "live-dot idle"} />
             <div>
-              <strong>{match.name}</strong>
-              <small>{match.venue} · {match.matchType}</small>
+              <strong>{hasActiveDeliveries ? match.name : "No Active Match"}</strong>
+              <small>{hasActiveDeliveries ? `${match.venue} · ${match.matchType}` : "Click Start Match"}</small>
             </div>
           </div>
           <nav>
@@ -869,6 +985,7 @@ function App() {
               onStartNewMatch={() => { setShowSetup(true); setShowCelebration(true) }}
               onOpenMatch={m => { setMatch(m); setShowCelebration(true); setView('scorecard') }}
               onResumeMatch={m => { setMatch(m); setView('live') }}
+              onInstallApp={handleInstallApp}
               onFlash={setFlash}
             />
           )}
@@ -895,7 +1012,13 @@ function App() {
             />
           )}
           {view === 'scorecard' && <Scorecard match={match} snap1={snap1} snap2={snap2} onFlash={setFlash} />}
-          {view === 'analytics' && <Analytics match={match} snap={currentSnap} />}
+          {view === 'analytics' && (
+            <Analytics
+              matches={matches}
+              currentMatch={match}
+              onSelectMatch={m => { setMatch(m); setView('analytics') }}
+            />
+          )}
           {view === 'history' && (
             <HistoryView
               matches={matches}
@@ -904,12 +1027,29 @@ function App() {
               onResume={m => { setMatch(m); setView('live') }}
               onNewMatch={() => { setShowSetup(true); setShowCelebration(true) }}
               onDelete={handleDeleteMatch}
+              onTogglePin={handleTogglePin}
+              onClearAll={handleClearAllMatches}
               onFlash={setFlash}
             />
           )}
-          {view === 'settings' && <SettingsView dark={dark} setDark={setDark} importMatch={importMatch} exportCurrent={() => exportMatch(match)} />}
+          {view === 'settings' && (
+            <SettingsView
+              dark={dark}
+              setDark={setDark}
+              importMatch={importMatch}
+              exportCurrent={() => exportMatch(match)}
+              onInstallApp={handleInstallApp}
+            />
+          )}
         </main>
       </div>
+
+      {showInstallModal && (
+        <InstallAppGuideDialog
+          onClose={() => setShowInstallModal(false)}
+          onInstall={deferredPrompt ? handleInstallApp : undefined}
+        />
+      )}
 
       {showSetup && (
         <Setup
@@ -931,6 +1071,7 @@ function App() {
           match={match}
           battingTeam={battingTeam}
           bowlingTeam={bowlingTeam}
+          onClose={() => setView('home')}
           onConfirm={(striker, nonStriker, bowler) => {
             setMatch(m => ({
               ...m,
@@ -950,6 +1091,7 @@ function App() {
           bowlingTeam={bowlingTeam}
           currentBowlerId={activeBowlerId}
           overNumber={currentSnap.currentOver}
+          onClose={() => setView('home')}
           onConfirm={(bowlerId) => {
             setMatch(m => ({ ...m, activeBowlerId: bowlerId }))
           }}
@@ -964,6 +1106,7 @@ function App() {
           bowlingTeam={match.teams[1 - match.battingFirst]}
           target={target}
           overs={match.overs}
+          onClose={() => setView('scorecard')}
           onStartInnings2={() => {
             setMatch(m => ({ ...m, currentInnings: 2, activeBowlerId: undefined }))
           }}
@@ -1023,8 +1166,73 @@ function App() {
   )
 }
 
+function InstallAppGuideDialog({ onClose, onInstall }: { onClose: () => void; onInstall?: () => void }) {
+  return (
+    <div className="dialog-backdrop" onClick={onClose}>
+      <div className="dialog install-guide-dialog" onClick={e => e.stopPropagation()}>
+        <div className="dialog-head">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div className="stadium-badge" style={{ width: 44, height: 44, margin: 0 }}><Download size={22} /></div>
+            <div>
+              <h2 style={{ fontSize: 18, margin: 0 }}>Install ScoreMaster App</h2>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--muted)' }}>100% offline scoring on Android, iPhone, Mac, or Windows</p>
+            </div>
+          </div>
+          <button className="icon-btn-text ghost" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="install-guide-body">
+          <div className="install-benefit-card">
+            <ShieldCheck size={24} style={{ color: 'var(--teal)', flex: 'none' }} />
+            <div>
+              <strong>100% Local Device Storage & Offline Ready</strong>
+              <span>All scorecards, team rosters, and match history are stored strictly on your local device via IndexedDB. Internet connection is NEVER required!</span>
+            </div>
+          </div>
+
+          <div className="install-steps-grid">
+            <div className="install-step-card">
+              <div className="step-tag">Desktop / Chrome / Edge</div>
+              <h4>Direct 1-Click Install</h4>
+              <p>Click the <strong>"Install App"</strong> button in your browser address bar or click below.</p>
+              {onInstall && (
+                <button className="primary install-cta-btn" onClick={onInstall}>
+                  <Download size={16} /> Click to Install Now
+                </button>
+              )}
+            </div>
+
+            <div className="install-step-card">
+              <div className="step-tag">iPhone / iPad (Safari)</div>
+              <h4>Add to Home Screen</h4>
+              <ol className="install-list">
+                <li>Tap the <strong>Share button</strong> ( 📤 ) in Safari.</li>
+                <li>Scroll down and tap <strong>"Add to Home Screen"</strong> ( ➕ ).</li>
+                <li>Tap <strong>Add</strong> at top right.</li>
+              </ol>
+            </div>
+
+            <div className="install-step-card">
+              <div className="step-tag">Android (Chrome)</div>
+              <h4>Add to Home Screen</h4>
+              <ol className="install-list">
+                <li>Tap the <strong>3 dots menu</strong> ( ⋮ ) in Chrome.</li>
+                <li>Select <strong>"Install app"</strong> or <strong>"Add to Home screen"</strong>.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
+        <div className="dialog-actions" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
+          <button className="ghost" onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* Home Landing Page Component */
-function HomeView({ match, matches, onStartNewMatch, onOpenMatch, onResumeMatch, onFlash }: { match: Match; matches: Match[]; onStartNewMatch: () => void; onOpenMatch: (m: Match) => void; onResumeMatch: (m: Match) => void; onFlash?: (msg: string) => void }) {
+function HomeView({ match, matches, onStartNewMatch, onOpenMatch, onResumeMatch, onInstallApp, onFlash }: { match: Match; matches: Match[]; onStartNewMatch: () => void; onOpenMatch: (m: Match) => void; onResumeMatch: (m: Match) => void; onInstallApp?: () => void; onFlash?: (msg: string) => void }) {
   const totalMatches = matches.length
   const totalDeliveries = matches.reduce((sum, m) => sum + m.deliveries.length, 0)
   const totalRuns = matches.reduce((sum, m) => sum + m.deliveries.reduce((dSum, d) => dSum + d.batterRuns + d.extras, 0), 0)
@@ -1042,6 +1250,11 @@ function HomeView({ match, matches, onStartNewMatch, onOpenMatch, onResumeMatch,
             <button className="primary large hero-btn" onClick={onStartNewMatch}>
               <Play size={20} /> Start New Match
             </button>
+            {onInstallApp && (
+              <button className="primary-subtle large hero-btn" onClick={onInstallApp}>
+                <Download size={18} /> Install App (100% Offline)
+              </button>
+            )}
             {match && !match.isCompleted && match.deliveries.length > 0 && (
               <button className="ghost large hero-btn" onClick={() => onResumeMatch(match)}>
                 <Activity size={20} /> Resume Live Match
@@ -1052,7 +1265,7 @@ function HomeView({ match, matches, onStartNewMatch, onOpenMatch, onResumeMatch,
         <div className="home-hero-graphic">
           <div className="hero-icon-card"><Trophy size={48} /></div>
           <div className="hero-stat-pill">
-            <strong>{totalMatches || 1}</strong> Matches Saved
+            <strong>{totalMatches}</strong> Matches Saved
           </div>
         </div>
       </div>
@@ -1076,7 +1289,7 @@ function HomeView({ match, matches, onStartNewMatch, onOpenMatch, onResumeMatch,
         </div>
         <div className="feature-card">
           <div className="feature-icon" style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}><ShieldCheck size={24} /></div>
-          <h3>Offline Auto-Save</h3>
+          <h3>100% Offline Ready</h3>
           <p>All matches auto-saved securely on your device using IndexedDB with JSON backup & CSV exports.</p>
         </div>
       </div>
@@ -1088,47 +1301,107 @@ function HomeView({ match, matches, onStartNewMatch, onOpenMatch, onResumeMatch,
           <button className="ghost" onClick={onStartNewMatch}><Plus size={16} /> New Match</button>
         </div>
 
-        <div className="recent-list">
-          {matches.slice(0, 3).map(m => {
-            const r1 = replayInnings(m, 1)
-            const r2 = replayInnings(m, 2)
-            const matchState = getMatchState(m)
+        {matches.length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--muted)', fontSize: 14 }}>
+            No saved matches yet. Click <strong>Start New Match</strong> to begin scoring your first match!
+          </div>
+        ) : (
+          <div className="recent-list">
+            {matches.slice(0, 3).map(m => {
+              const r1 = replayInnings(m, 1)
+              const r2 = replayInnings(m, 2)
+              const matchState = getMatchState(m)
 
-            return (
-              <div className="recent-card" key={m.id}>
-                <div className="recent-head">
-                  <strong>{m.name}</strong>
-                  <span className="recent-date">{m.date} · {m.matchType}</span>
-                </div>
-                <div className="recent-scores">
-                  <div className="recent-team">
-                    <span>{m.teams[0].name}</span>
-                    <strong>{r1.runs}/{r1.wickets}</strong>
+              return (
+                <div className="recent-card" key={m.id}>
+                  <div className="recent-head">
+                    <strong>{m.name}</strong>
+                    <span className="recent-date">{m.date} · {m.matchType}</span>
                   </div>
-                  <div className="recent-vs">VS</div>
-                  <div className="recent-team">
-                    <span>{m.teams[1].name}</span>
-                    <strong>{r2.runs}/{r2.wickets}</strong>
+                  <div className="recent-scores">
+                    <div className="recent-team">
+                      <span>{m?.teams?.[0]?.name ?? 'Team 1'}</span>
+                      <strong>{r1.runs}/{r1.wickets}</strong>
+                    </div>
+                    <div className="recent-vs">VS</div>
+                    <div className="recent-team">
+                      <span>{m?.teams?.[1]?.name ?? 'Team 2'}</span>
+                      <strong>{r2.runs}/{r2.wickets}</strong>
+                    </div>
+                  </div>
+
+                  {matchState.winnerMessage && (
+                    <div className="recent-winner">🏆 {matchState.winnerMessage}</div>
+                  )}
+
+                  <div className="recent-actions">
+                    <button className="ghost" style={{ flex: 1 }} onClick={() => onOpenMatch(m)}>
+                      <BookOpen size={15} /> Scorecard
+                    </button>
+                    <button className="primary" style={{ flex: 1 }} onClick={() => printMatchPdf(m)}>
+                      <Printer size={15} /> PDF
+                    </button>
                   </div>
                 </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
-                {matchState.winnerMessage && (
-                  <div className="recent-winner">🏆 {matchState.winnerMessage}</div>
-                )}
-
-                <div className="recent-actions">
-                  <button className="ghost" style={{ flex: 1 }} onClick={() => onOpenMatch(m)}>
-                    <BookOpen size={15} /> Scorecard
-                  </button>
-                  <button className="primary" style={{ flex: 1 }} onClick={() => printMatchPdf(m)}>
-                    <Printer size={15} /> Export PDF
-                  </button>
-                </div>
-              </div>
-            )
-          })}
+function SettingsView({ dark, setDark, importMatch, exportCurrent, onInstallApp }: { dark: boolean; setDark: (v: boolean) => void; importMatch: (file: File) => void; exportCurrent: () => void; onInstallApp?: () => void }) {
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">PREFERENCES</p>
+          <h1>App Settings</h1>
         </div>
       </div>
+
+      <section className="panel settings-panel">
+        <div className="setting">
+          <div>
+            <strong>Appearance Theme</strong>
+            <small>Toggle light/dark mode for daylight ground conditions</small>
+          </div>
+          <button className="toggle" onClick={() => setDark(!dark)}>
+            {dark ? <Moon size={16} /> : <Sun size={16} />} {dark ? 'Dark Mode' : 'Light Mode'}
+          </button>
+        </div>
+        <div className="setting">
+          <div>
+            <strong>Offline App Installation (PWA)</strong>
+            <small>Install ScoreMaster onto your home screen or desktop for 100% offline access</small>
+          </div>
+          <button className="toggle primary-subtle" onClick={onInstallApp}>
+            <Download size={16} /> Install App
+          </button>
+        </div>
+        <div className="setting">
+          <div>
+            <strong>Local Storage Security</strong>
+            <small>100% stored on local device (IndexedDB) with zero internet dependency</small>
+          </div>
+          <button className="toggle on"><ShieldCheck size={16} /> Secured Locally</button>
+        </div>
+        <div className="setting">
+          <div>
+            <strong>Backup & Data Transfer</strong>
+            <small>Export or import match files in JSON format</small>
+          </div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="toggle" onClick={exportCurrent}><Download size={16} /> Export JSON</button>
+            <label className="toggle" style={{ cursor: 'pointer' }}>
+              <Download size={16} /> Import JSON
+              <input type="file" accept="application/json" hidden onChange={e => { const file = e.target.files?.[0]; if (file) importMatch(file) }} />
+            </label>
+          </div>
+        </div>
+      </section>
     </div>
   )
 }
@@ -1357,6 +1630,9 @@ function Scorecard({ match, snap1, snap2, onFlash }: { match: Match; snap1: Snap
   const team1 = match.teams[match.battingFirst]
   const team2 = match.teams[1 - match.battingFirst]
 
+  const totalExtras1 = Object.values(snap1.extras).reduce((sum, n) => sum + n, 0)
+  const totalExtras2 = Object.values(snap2.extras).reduce((sum, n) => sum + n, 0)
+
   return (
     <div className="page">
       <div className="page-head">
@@ -1372,13 +1648,13 @@ function Scorecard({ match, snap1, snap2, onFlash }: { match: Match; snap1: Snap
         </div>
       </div>
 
-      {/* 1st Innings */}
+      {/* 1st Innings Batting */}
       <h2 style={{ fontSize: 20, margin: '24px 0 12px', color: 'var(--accent)' }}>
         1st Innings: {team1.name} — {snap1.runs}/{snap1.wickets} ({Math.floor(snap1.legalBalls / 6)}.{snap1.legalBalls % 6} Overs)
       </h2>
       <section className="panel table-panel">
         <div className="table-title">
-          <span>{team1.name} Batting Performance</span>
+          <span>🏏 {team1.name} Batting Performance</span>
           <span>Runs · Balls · 4s · 6s · SR</span>
         </div>
         {team1.players.map(p => {
@@ -1395,15 +1671,47 @@ function Scorecard({ match, snap1, snap2, onFlash }: { match: Match; snap1: Snap
             </div>
           )
         })}
+        <div className="scorecard-extras-row">
+          <strong>Extras: {totalExtras1} runs</strong>
+          <small>(Wides: {snap1.extras.wide ?? 0}, No Balls: {snap1.extras.noBall ?? 0}, Byes: {snap1.extras.bye ?? 0}, Leg Byes: {snap1.extras.legBye ?? 0})</small>
+        </div>
       </section>
 
-      {/* 2nd Innings */}
+      {/* 1st Innings Bowling */}
+      <section className="panel table-panel" style={{ marginTop: 16 }}>
+        <div className="table-title">
+          <span>⚡ {team2.name} Bowling Figures</span>
+          <span>Overs · Runs · Wickets · Econ</span>
+        </div>
+        {Object.entries(snap1.bowlers).length === 0 ? (
+          <div style={{ padding: 16, color: 'var(--muted)', fontSize: 13, textAlign: 'center' }}>No bowling overs recorded in 1st Innings yet</div>
+        ) : (
+          Object.entries(snap1.bowlers).map(([id, s]) => {
+            const bowlerPlayer = team2.players.find(p => p.id === id)
+            const name = bowlerPlayer ? getPlayerNameWithCaptain(bowlerPlayer, team2) : id
+            const econ = s.balls ? (s.runs / (s.balls / 6)).toFixed(2) : '0.00'
+
+            return (
+              <div className="table-row" key={id}>
+                <strong>{name}</strong>
+                <span>{Math.floor(s.balls / 6)}.{s.balls % 6} ov</span>
+                <span>{s.runs} r</span>
+                <span className="bold-stat">{s.wickets} w</span>
+                <span>Econ {econ}</span>
+                <small>Wd: {s.wides} · Nb: {s.noBalls}</small>
+              </div>
+            )
+          })
+        )}
+      </section>
+
+      {/* 2nd Innings Batting */}
       <h2 style={{ fontSize: 20, margin: '36px 0 12px', color: 'var(--teal)' }}>
         2nd Innings: {team2.name} — {snap2.runs}/{snap2.wickets} ({Math.floor(snap2.legalBalls / 6)}.{snap2.legalBalls % 6} Overs)
       </h2>
       <section className="panel table-panel">
         <div className="table-title">
-          <span>{team2.name} Batting Performance</span>
+          <span>🏏 {team2.name} Batting Performance</span>
           <span>Runs · Balls · 4s · 6s · SR</span>
         </div>
         {team2.players.map(p => {
@@ -1420,64 +1728,481 @@ function Scorecard({ match, snap1, snap2, onFlash }: { match: Match; snap1: Snap
             </div>
           )
         })}
+        <div className="scorecard-extras-row">
+          <strong>Extras: {totalExtras2} runs</strong>
+          <small>(Wides: {snap2.extras.wide ?? 0}, No Balls: {snap2.extras.noBall ?? 0}, Byes: {snap2.extras.bye ?? 0}, Leg Byes: {snap2.extras.legBye ?? 0})</small>
+        </div>
+      </section>
+
+      {/* 2nd Innings Bowling */}
+      <section className="panel table-panel" style={{ marginTop: 16 }}>
+        <div className="table-title">
+          <span>⚡ {team1.name} Bowling Figures</span>
+          <span>Overs · Runs · Wickets · Econ</span>
+        </div>
+        {Object.entries(snap2.bowlers).length === 0 ? (
+          <div style={{ padding: 16, color: 'var(--muted)', fontSize: 13, textAlign: 'center' }}>No bowling overs recorded in 2nd Innings yet</div>
+        ) : (
+          Object.entries(snap2.bowlers).map(([id, s]) => {
+            const bowlerPlayer = team1.players.find(p => p.id === id)
+            const name = bowlerPlayer ? getPlayerNameWithCaptain(bowlerPlayer, team1) : id
+            const econ = s.balls ? (s.runs / (s.balls / 6)).toFixed(2) : '0.00'
+
+            return (
+              <div className="table-row" key={id}>
+                <strong>{name}</strong>
+                <span>{Math.floor(s.balls / 6)}.{s.balls % 6} ov</span>
+                <span>{s.runs} r</span>
+                <span className="bold-stat">{s.wickets} w</span>
+                <span>Econ {econ}</span>
+                <small>Wd: {s.wides} · Nb: {s.noBalls}</small>
+              </div>
+            )
+          })
+        )}
       </section>
     </div>
   )
 }
 
-function Analytics({ match, snap }: { match: Match; snap: Snapshot }) {
-  const max = Math.max(...snap.overs.map(o => o.runs), 1)
+function ScoringDonutChart({ fours, sixes, runningRuns, extras }: { fours: number; sixes: number; runningRuns: number; extras: number }) {
+  const fourRuns = fours * 4
+  const sixRuns = sixes * 6
+  const total = fourRuns + sixRuns + runningRuns + extras
+
+  if (total === 0) {
+    return (
+      <div className="empty-donut-box">
+        <div style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 600 }}>No runs scored in this innings yet</div>
+      </div>
+    )
+  }
+
+  const pFours = (fourRuns / total) * 100
+  const pSixes = (sixRuns / total) * 100
+  const pRunning = (runningRuns / total) * 100
+  const pExtras = (extras / total) * 100
+
+  const r = 38
+  const circ = 2 * Math.PI * r
+
+  const sFours = (pFours / 100) * circ
+  const sSixes = (pSixes / 100) * circ
+  const sRunning = (pRunning / 100) * circ
+  const sExtras = (pExtras / 100) * circ
+
+  let offset = 0
+  const oFours = offset
+  offset -= sFours
+  const oSixes = offset
+  offset -= sSixes
+  const oRunning = offset
+  offset -= sRunning
+  const oExtras = offset
+
   return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">PERFORMANCE LAB</p>
-          <h1>Match Analytics</h1>
+    <div className="donut-chart-container">
+      <div className="donut-svg-stage">
+        <svg width="150" height="150" viewBox="0 0 100 100" style={{ transform: 'rotate(-90deg)' }}>
+          <circle cx="50" cy="50" r={r} fill="none" stroke="var(--line)" strokeWidth="14" />
+          {sFours > 0 && <circle cx="50" cy="50" r={r} fill="none" stroke="#ea580c" strokeWidth="14" strokeDasharray={`${sFours} ${circ - sFours}`} strokeDashoffset={oFours} />}
+          {sSixes > 0 && <circle cx="50" cy="50" r={r} fill="none" stroke="#0d9488" strokeWidth="14" strokeDasharray={`${sSixes} ${circ - sSixes}`} strokeDashoffset={oSixes} />}
+          {sRunning > 0 && <circle cx="50" cy="50" r={r} fill="none" stroke="#0284c7" strokeWidth="14" strokeDasharray={`${sRunning} ${circ - sRunning}`} strokeDashoffset={oRunning} />}
+          {sExtras > 0 && <circle cx="50" cy="50" r={r} fill="none" stroke="#f59e0b" strokeWidth="14" strokeDasharray={`${sExtras} ${circ - sExtras}`} strokeDashoffset={oExtras} />}
+        </svg>
+        <div className="donut-center-text">
+          <strong>{total}</strong>
+          <small>RUNS</small>
         </div>
-        <div className="tag"><BarChart3 size={15} /> Calculated from {match.deliveries.length} deliveries</div>
       </div>
 
-      <div className="analytics-grid">
-        <section className="panel chart-panel">
-          <div className="panel-title">
-            <span>RUNS PER OVER (CURRENT INNINGS)</span>
-            <span className="muted">MANHATTAN CHART</span>
-          </div>
-          <div className="chart">
-            {snap.overs.map(o => (
-              <div className="bar-wrap" key={o.number}>
-                <div className="bar" style={{ height: `${Math.max(6, (o.runs / max) * 160)}px` }}>
-                  <span>{o.runs}</span>
-                </div>
-                <small>Ov {o.number}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel insight-panel">
-          <div className="panel-title"><span>KEY HIGHLIGHTS</span></div>
-          <div className="insight">
-            <strong>{snap.runs ? (snap.runs / Math.max(snap.legalBalls, 1) * 6).toFixed(2) : '0.00'}</strong>
-            <span>Current Run Rate</span>
-          </div>
-          <div className="insight">
-            <strong>{snap.legalBalls ? Math.round((Object.values(snap.batters).reduce((sum, s) => sum + s.dots, 0) / snap.legalBalls) * 100) : 0}%</strong>
-            <span>Dot Ball Percentage</span>
-          </div>
-          <div className="insight">
-            <strong>{Object.values(snap.batters).reduce((sum, s) => sum + s.fours, 0)} / {Object.values(snap.batters).reduce((sum, s) => sum + s.sixes, 0)}</strong>
-            <span>Boundaries (Fours / Sixes)</span>
-          </div>
-        </section>
+      <div className="donut-legend-grid">
+        <div className="donut-legend-item">
+          <span className="legend-chip" style={{ background: '#ea580c' }} />
+          <div><strong>Fours (4s)</strong><span>{fourRuns} pts ({pFours.toFixed(0)}%)</span></div>
+        </div>
+        <div className="donut-legend-item">
+          <span className="legend-chip" style={{ background: '#0d9488' }} />
+          <div><strong>Sixes (6s)</strong><span>{sixRuns} pts ({pSixes.toFixed(0)}%)</span></div>
+        </div>
+        <div className="donut-legend-item">
+          <span className="legend-chip" style={{ background: '#0284c7' }} />
+          <div><strong>Singles / 2s / 3s</strong><span>{runningRuns} pts ({pRunning.toFixed(0)}%)</span></div>
+        </div>
+        <div className="donut-legend-item">
+          <span className="legend-chip" style={{ background: '#f59e0b' }} />
+          <div><strong>Extras</strong><span>{extras} pts ({pExtras.toFixed(0)}%)</span></div>
+        </div>
       </div>
     </div>
   )
 }
 
-function HistoryView({ matches, current, onOpen, onResume, onNewMatch, onDelete, onFlash }: { matches: Match[]; current: Match; onOpen: (m: Match) => void; onResume: (m: Match) => void; onNewMatch: () => void; onDelete: (id: string) => void; onFlash?: (msg: string) => void }) {
-  const list = matches.some(m => m.id === current.id) ? matches : [current, ...matches]
-  const sortedList = [...list].sort((a, b) => b.createdAt - a.createdAt)
+function getTopBatter(snap: Snapshot, team: Team) {
+  const entries = Object.entries(snap.batters)
+  if (!entries.length) return null
+  entries.sort((a, b) => b[1].runs - a[1].runs || a[1].balls - b[1].balls)
+  const [id, stat] = entries[0]
+  const player = team.players.find(p => p.id === id)
+  return { player, stat, id }
+}
+
+function getTopBowler(snap: Snapshot, team: Team) {
+  const entries = Object.entries(snap.bowlers)
+  if (!entries.length) return null
+  entries.sort((a, b) => b[1].wickets - a[1].wickets || a[1].runs - b[1].runs)
+  const [id, stat] = entries[0]
+  const player = team.players.find(p => p.id === id)
+  return { player, stat, id }
+}
+
+function Analytics({ matches, currentMatch, onSelectMatch }: { matches: Match[]; currentMatch: Match; onSelectMatch?: (m: Match) => void }) {
+  const allMatches = useMemo(() => {
+    const list = matches.some(m => m.id === currentMatch.id) ? matches : [currentMatch, ...matches]
+    return list.filter(m => m && m.teams?.length === 2)
+  }, [matches, currentMatch])
+
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null)
+  const [tab, setTab] = useState<'inn1' | 'inn2' | 'compare'>('inn1')
+
+  const selectedMatch = allMatches.find(m => m.id === selectedMatchId) ?? null
+
+  const matchState = useMemo(() => {
+    if (!selectedMatch) return null
+    return {
+      snap1: replayInnings(selectedMatch, 1),
+      snap2: replayInnings(selectedMatch, 2),
+      state: getMatchState(selectedMatch)
+    }
+  }, [selectedMatch])
+
+  if (!selectedMatch || !matchState) {
+    return (
+      <div className="page">
+        <div className="page-head">
+          <div>
+            <p className="eyebrow">PERFORMANCE LAB</p>
+            <h1>Match Analytics</h1>
+          </div>
+          <div className="tag"><BarChart3 size={15} /> {allMatches.length} Matches Available</div>
+        </div>
+
+        <div className="panel select-analytics-prompt">
+          <div className="stadium-badge"><Trophy size={42} /></div>
+          <h2>Select a Match to Analyze</h2>
+          <p className="setup-copy" style={{ maxWidth: 520, margin: '8px auto 24px' }}>
+            Choose any match from your cricket history below to inspect over-by-over Manhattan charts, dot ball counts, boundary ratios, extras, and top batter/bowler spells.
+          </p>
+
+          <div className="analytics-match-picker-grid">
+            {allMatches.map(m => {
+              const r1 = replayInnings(m, 1)
+              const r2 = replayInnings(m, 2)
+
+              return (
+                <div className="analytics-match-card" key={m.id} onClick={() => setSelectedMatchId(m.id)}>
+                  <div className="card-head">
+                    <strong>{m.name}</strong>
+                    <span>{m.date}</span>
+                  </div>
+                  <div className="card-teams">
+                    <div>{m?.teams?.[0]?.name ?? 'Team 1'} <strong>{r1.runs}/{r1.wickets}</strong></div>
+                    <small>vs</small>
+                    <div>{m?.teams?.[1]?.name ?? 'Team 2'} <strong>{r2.runs}/{r2.wickets}</strong></div>
+                  </div>
+                  <div className="card-foot">
+                    <span>{m.matchType} · {m.overs} Overs</span>
+                    <button className="primary-subtle icon-btn-text">
+                      Analyze Match <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+
+            {allMatches.length === 0 && (
+              <div className="empty-analytics-card" style={{ gridColumn: '1 / -1' }}>
+                <BarChart3 size={48} style={{ color: 'var(--muted)', opacity: 0.6 }} />
+                <h3>No saved matches found</h3>
+                <p>Start a new match to record live scores and view performance analytics.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const { snap1, snap2, state } = matchState
+  const currentSnap = state.currentSnap
+  const hasInnings2 = selectedMatch.deliveries.some(d => d.innings === 2) || selectedMatch.currentInnings === 2
+
+  const team1 = selectedMatch.teams[selectedMatch.battingFirst]
+  const team2 = selectedMatch.teams[1 - selectedMatch.battingFirst]
+
+  const activeSnap = tab === 'inn1' ? snap1 : tab === 'inn2' ? snap2 : currentSnap
+  const activeTeam = tab === 'inn1' ? team1 : team2
+  const opponentTeam = tab === 'inn1' ? team2 : team1
+
+  const totalDeliveries = selectedMatch.deliveries.length
+
+  // Calculate metrics
+  const totalDots = Object.values(activeSnap.batters).reduce((sum, s) => sum + s.dots, 0)
+  const dotPct = activeSnap.legalBalls ? Math.round((totalDots / activeSnap.legalBalls) * 100) : 0
+
+  const totalFours = Object.values(activeSnap.batters).reduce((sum, s) => sum + s.fours, 0)
+  const totalSixes = Object.values(activeSnap.batters).reduce((sum, s) => sum + s.sixes, 0)
+  const boundaryRuns = totalFours * 4 + totalSixes * 6
+  const boundaryPct = activeSnap.runs ? Math.round((boundaryRuns / activeSnap.runs) * 100) : 0
+
+  const totalExtras = Object.values(activeSnap.extras).reduce((sum, count) => sum + count, 0)
+
+  const topBatter = getTopBatter(activeSnap, activeTeam)
+  const topBowler = getTopBowler(activeSnap, opponentTeam)
+
+  const maxRunsPerOver = Math.max(...activeSnap.overs.map(o => o.runs), 6)
+  const avgRpo = activeSnap.legalBalls ? (activeSnap.runs / (activeSnap.legalBalls / 6)) : 0
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <p className="eyebrow">PERFORMANCE LAB · ANALYZING MATCH</p>
+          <h1>{selectedMatch.name}</h1>
+        </div>
+        <div className="head-actions" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <select
+            className="match-select-dropdown"
+            value={selectedMatchId}
+            onChange={e => {
+              if (e.target.value === '') setSelectedMatchId(null)
+              else setSelectedMatchId(e.target.value)
+            }}
+          >
+            <option value="">-- Switch Match --</option>
+            {allMatches.map(m => (
+              <option key={m.id} value={m.id}>{m.name} ({m.teams[0].name} vs {m.teams[1].name})</option>
+            ))}
+          </select>
+          <button className="ghost" onClick={() => setSelectedMatchId(null)}>
+            Change Match
+          </button>
+        </div>
+      </div>
+
+      {/* Innings Selector Tabs */}
+      <div className="analytics-tabs-row">
+        <button
+          className={`tab-btn ${tab === 'inn1' ? 'active' : ''}`}
+          onClick={() => setTab('inn1')}
+        >
+          1st Innings: {team1.name} ({snap1.runs}/{snap1.wickets})
+        </button>
+        <button
+          className={`tab-btn ${tab === 'inn2' ? 'active' : ''}`}
+          onClick={() => setTab('inn2')}
+        >
+          2nd Innings: {team2.name} ({snap2.runs}/{snap2.wickets})
+        </button>
+        {hasInnings2 && (
+          <button
+            className={`tab-btn ${tab === 'compare' ? 'active' : ''}`}
+            onClick={() => setTab('compare')}
+          >
+            📊 Compare Both Innings
+          </button>
+        )}
+      </div>
+
+      {tab !== 'compare' ? (
+        activeSnap.legalBalls === 0 && activeSnap.overs.length === 0 ? (
+          <div className="panel empty-analytics-card">
+            <BarChart3 size={48} style={{ color: 'var(--muted)', opacity: 0.6 }} />
+            <h3>No delivery data recorded yet for {activeTeam.name}</h3>
+            <p>Balls recorded during Live Scoring will generate real-time Manhattan charts, run rates, boundary stats, and bowler spell analysis.</p>
+          </div>
+        ) : (
+          <div className="analytics-content">
+            {/* Top Overview Cards */}
+            <div className="analytics-stat-grid">
+              <div className="analytics-card">
+                <div className="card-label">TOTAL SCORE</div>
+                <div className="card-val">{activeSnap.runs}/{activeSnap.wickets}</div>
+                <div className="card-sub">{Math.floor(activeSnap.legalBalls / 6)}.{activeSnap.legalBalls % 6} Overs</div>
+              </div>
+              <div className="analytics-card">
+                <div className="card-label">RUN RATE</div>
+                <div className="card-val">{activeSnap.legalBalls ? (activeSnap.runs / (activeSnap.legalBalls / 6)).toFixed(2) : '0.00'}</div>
+                <div className="card-sub">Runs Per Over</div>
+              </div>
+              <div className="analytics-card">
+                <div className="card-label">DOT BALLS</div>
+                <div className="card-val">{dotPct}%</div>
+                <div className="card-sub">{totalDots} Dots out of {activeSnap.legalBalls} balls</div>
+              </div>
+              <div className="analytics-card">
+                <div className="card-label">BOUNDARIES</div>
+                <div className="card-val">{totalFours}x4 · {totalSixes}x6</div>
+                <div className="card-sub">{boundaryRuns} runs ({boundaryPct}% of score)</div>
+              </div>
+            </div>
+
+            {/* Manhattan Chart & Donut Chart Section */}
+            <div className="analytics-two-col">
+              <section className="panel chart-panel" style={{ flex: 1.4 }}>
+                <div className="panel-title">
+                  <span>RUNS PER OVER — {activeTeam.name.toUpperCase()}</span>
+                  <span className="muted">MANHATTAN BAR CHART</span>
+                </div>
+                <div className="chart-wrapper">
+                  <div className="chart">
+                    {activeSnap.overs.map(o => {
+                      const height = Math.max(12, (o.runs / maxRunsPerOver) * 160)
+                      const isBigOver = o.runs >= 12
+                      const wicketsInOver = o.deliveries.filter(d => d.wicket).length
+
+                      return (
+                        <div className="bar-wrap" key={o.number}>
+                          <div
+                            className={`bar ${isBigOver ? 'high-run' : o.runs === 0 ? 'maiden' : ''}`}
+                            style={{ height: `${height}px` }}
+                          >
+                            <span>{o.runs}</span>
+                            {wicketsInOver > 0 && <div className="wicket-indicator">W</div>}
+                          </div>
+                          <small>Ov {o.number}</small>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="chart-legend">
+                    <span>Avg RPO: <strong>{avgRpo.toFixed(2)}</strong></span>
+                    <span><i className="legend-dot high" /> Big Over (12+ runs)</span>
+                    <span><i className="legend-dot wicket" /> Wicket Fallen</span>
+                  </div>
+                </div>
+              </section>
+
+              {/* Scoring Distribution Donut Chart */}
+              <section className="panel insight-panel" style={{ flex: 1 }}>
+                <div className="panel-title">
+                  <span>SCORING RUN DISTRIBUTION</span>
+                  <span className="muted">PIE / DONUT CHART</span>
+                </div>
+                <ScoringDonutChart
+                  fours={totalFours}
+                  sixes={totalSixes}
+                  runningRuns={Math.max(0, activeSnap.runs - boundaryRuns - totalExtras)}
+                  extras={totalExtras}
+                />
+              </section>
+            </div>
+
+            {/* Highlights Grid */}
+            <div className="analytics-grid">
+              {/* Extras Breakdown */}
+              <section className="panel insight-panel">
+                <div className="panel-title"><span>EXTRAS BREAKDOWN</span><span className="muted">Total: {totalExtras} Runs</span></div>
+                <div className="extras-flex">
+                  <div className="extra-pill"><strong>{activeSnap.extras.wide ?? 0}</strong><span>Wides</span></div>
+                  <div className="extra-pill"><strong>{activeSnap.extras.noBall ?? 0}</strong><span>No Balls</span></div>
+                  <div className="extra-pill"><strong>{activeSnap.extras.bye ?? 0}</strong><span>Byes</span></div>
+                  <div className="extra-pill"><strong>{activeSnap.extras.legBye ?? 0}</strong><span>Leg Byes</span></div>
+                  <div className="extra-pill"><strong>{activeSnap.extras.penalty ?? 0}</strong><span>Penalties</span></div>
+                </div>
+              </section>
+
+              {/* Top Batter */}
+              {topBatter && topBatter.player && (
+                <section className="panel performer-card">
+                  <div className="panel-title"><span>TOP BATTER</span><span className="muted">{activeTeam.name}</span></div>
+                  <div className="performer-body">
+                    <div className="performer-name">🏆 {getPlayerNameWithCaptain(topBatter.player, activeTeam)}</div>
+                    <div className="performer-main-stat">{topBatter.stat.runs} <small>runs</small></div>
+                    <div className="performer-sub-stats">
+                      <span>{topBatter.stat.balls} balls</span> · <span>SR {topBatter.stat.balls ? ((topBatter.stat.runs / topBatter.stat.balls) * 100).toFixed(1) : '0.0'}</span> · <span>{topBatter.stat.fours}x4 / {topBatter.stat.sixes}x6</span>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              {/* Top Bowler */}
+              {topBowler && topBowler.player && (
+                <section className="panel performer-card">
+                  <div className="panel-title"><span>TOP BOWLER</span><span className="muted">{opponentTeam.name}</span></div>
+                  <div className="performer-body">
+                    <div className="performer-name">⚡ {getPlayerNameWithCaptain(topBowler.player, opponentTeam)}</div>
+                    <div className="performer-main-stat">{topBowler.stat.wickets} <small>wickets</small></div>
+                    <div className="performer-sub-stats">
+                      <span>{Math.floor(topBowler.stat.balls / 6)}.{topBowler.stat.balls % 6} Overs</span> · <span>{topBowler.stat.runs} Runs</span> · <span>Econ {topBowler.stat.balls ? (topBowler.stat.runs / (topBowler.stat.balls / 6)).toFixed(2) : '0.00'}</span>
+                    </div>
+                  </div>
+                </section>
+              )}
+            </div>
+          </div>
+        )
+      ) : (
+        /* Comparison View */
+        <div className="analytics-content">
+          <section className="panel chart-panel">
+            <div className="panel-title"><span>INNINGS COMPARISON — RUNS PER OVER</span></div>
+            <div className="compare-grid">
+              <div className="compare-team-box">
+                <h3 style={{ color: 'var(--accent)', margin: '0 0 10px' }}>1st Innings: {team1.name}</h3>
+                <div className="compare-stat-row">
+                  <span>Score</span><strong>{snap1.runs}/{snap1.wickets} ({Math.floor(snap1.legalBalls / 6)}.{snap1.legalBalls % 6} ov)</strong>
+                </div>
+                <div className="compare-stat-row">
+                  <span>Run Rate</span><strong>{snap1.legalBalls ? (snap1.runs / (snap1.legalBalls / 6)).toFixed(2) : '0.00'}</strong>
+                </div>
+                <div className="compare-stat-row">
+                  <span>Boundaries</span><strong>{Object.values(snap1.batters).reduce((s, b) => s + b.fours, 0)}x4 · {Object.values(snap1.batters).reduce((s, b) => s + b.sixes, 0)}x6</strong>
+                </div>
+              </div>
+
+              <div className="compare-team-box">
+                <h3 style={{ color: 'var(--teal)', margin: '0 0 10px' }}>2nd Innings: {team2.name}</h3>
+                <div className="compare-stat-row">
+                  <span>Score</span><strong>{snap2.runs}/{snap2.wickets} ({Math.floor(snap2.legalBalls / 6)}.{snap2.legalBalls % 6} ov)</strong>
+                </div>
+                <div className="compare-stat-row">
+                  <span>Run Rate</span><strong>{snap2.legalBalls ? (snap2.runs / (snap2.legalBalls / 6)).toFixed(2) : '0.00'}</strong>
+                </div>
+                <div className="compare-stat-row">
+                  <span>Boundaries</span><strong>{Object.values(snap2.batters).reduce((s, b) => s + b.fours, 0)}x4 · {Object.values(snap2.batters).reduce((s, b) => s + b.sixes, 0)}x6</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HistoryView({
+  matches, current, onOpen, onResume, onNewMatch, onDelete, onTogglePin, onClearAll, onFlash
+}: {
+  matches: Match[]
+  current: Match
+  onOpen: (m: Match) => void
+  onResume: (m: Match) => void
+  onNewMatch: () => void
+  onDelete: (id: string) => void
+  onTogglePin: (id: string) => void
+  onClearAll: () => void
+  onFlash?: (msg: string) => void
+}) {
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+  const list = matches.some(m => m.id === current.id) ? matches : (current.deliveries.length > 0 ? [current, ...matches] : matches)
+
+  // Sort pinned matches first, then by createdAt descending
+  const sortedList = [...list].sort((a, b) => {
+    if (a.isPinned && !b.isPinned) return -1
+    if (!a.isPinned && b.isPinned) return 1
+    return b.createdAt - a.createdAt
+  })
 
   return (
     <div className="page">
@@ -1486,109 +2211,125 @@ function HistoryView({ matches, current, onOpen, onResume, onNewMatch, onDelete,
           <p className="eyebrow">MATCH ARCHIVE</p>
           <h1>Saved Match History</h1>
         </div>
-        <button className="primary" onClick={onNewMatch}><Plus size={17} /> Start New Match</button>
-      </div>
-
-      <div className="history-list">
-        {sortedList.map(m => {
-          const r1 = replayInnings(m, 1)
-          const r2 = replayInnings(m, 2)
-          const isOngoing = !m.isCompleted
-
-          return (
-            <div className="history-item-row" key={m.id}>
-              <div className="history-item-main" onClick={() => onOpen(m)}>
-                <div className="history-date">
-                  {m.date}
-                  <small>{m.matchType} {isOngoing ? '· LIVE' : ''}</small>
-                </div>
-                <div className="history-teams">
-                  <strong>{m.teams[0].name}</strong>
-                  <span>VS</span>
-                  <strong>{m.teams[1].name}</strong>
-                </div>
-                <div className="history-score">
-                  Inn 1: {r1.runs}/{r1.wickets} | Inn 2: {r2.runs}/{r2.wickets}
-                </div>
-              </div>
-
-              <div className="history-item-actions">
-                {isOngoing && (
-                  <button className="icon-btn-text primary-btn" title="Resume Live Scoring" onClick={() => onResume(m)}>
-                    <Play size={14} /> Resume
-                  </button>
-                )}
-                <button
-                  className="icon-btn-text primary-subtle"
-                  title="Export PDF Scorecard"
-                  onClick={() => printMatchPdf(m)}
-                >
-                  <Printer size={14} /> PDF
-                </button>
-                <button
-                  className="icon-btn-text ghost-subtle"
-                  title="Share Scorecard"
-                  onClick={() => shareMatchScorecard(m, onFlash)}
-                >
-                  <Share2 size={14} /> Share
-                </button>
-                <button
-                  className="icon-btn-text danger-subtle"
-                  title="Delete Match"
-                  onClick={() => onDelete(m.id)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
-function SettingsView({ dark, setDark, importMatch, exportCurrent }: { dark: boolean; setDark: (v: boolean) => void; importMatch: (file: File) => void; exportCurrent: () => void }) {
-  return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <p className="eyebrow">PREFERENCES</p>
-          <h1>App Settings</h1>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          {sortedList.length > 0 && (
+            <button
+              className="ghost"
+              onClick={() => setClearConfirmOpen(true)}
+              style={{ color: 'var(--red)', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+            >
+              <Trash2 size={16} /> Clear All History
+            </button>
+          )}
+          <button className="primary" onClick={onNewMatch}><Plus size={17} /> Start New Match</button>
         </div>
       </div>
 
-      <section className="panel settings-panel">
-        <div className="setting">
-          <div>
-            <strong>Appearance Theme</strong>
-            <small>Toggle light/dark mode for daylight ground conditions</small>
-          </div>
-          <button className="toggle" onClick={() => setDark(!dark)}>
-            {dark ? <Moon size={16} /> : <Sun size={16} />} {dark ? 'Dark Mode' : 'Light Mode'}
+      {sortedList.length === 0 ? (
+        <div className="panel empty-history-card">
+          <div className="stadium-badge"><Trophy size={44} /></div>
+          <h2>Match History is Empty</h2>
+          <p className="setup-copy" style={{ maxWidth: 460, margin: '8px auto 20px' }}>
+            You have no saved or active matches in your archive. Start a new match to record live scores, generate PDF scorecards, and track cricket analytics!
+          </p>
+          <button className="primary large" onClick={onNewMatch}>
+            <Plus size={18} /> Start First Match
           </button>
         </div>
-        <div className="setting">
-          <div>
-            <strong>Animations & Celebration Effects</strong>
-            <small>Confetti fireworks and boundary popups</small>
-          </div>
-          <button className="toggle on"><Check size={16} /> Enabled</button>
+      ) : (
+        <div className="history-list">
+          {sortedList.map(m => {
+            const r1 = replayInnings(m, 1)
+            const r2 = replayInnings(m, 2)
+            const isOngoing = !m.isCompleted
+
+            return (
+              <div className={`history-item-row ${m.isPinned ? 'is-pinned' : ''}`} key={m.id}>
+                {m.isPinned && (
+                  <div className="pin-badge">📌 PINNED</div>
+                )}
+                <div className="history-item-main" onClick={() => onOpen(m)}>
+                  <div className="history-date">
+                    {m.date}
+                    <small>{m.matchType} {isOngoing ? '· LIVE' : ''}</small>
+                  </div>
+                  <div className="history-teams">
+                    <strong>{m?.teams?.[0]?.name ?? 'Team 1'}</strong>
+                    <span>VS</span>
+                    <strong>{m?.teams?.[1]?.name ?? 'Team 2'}</strong>
+                  </div>
+                  <div className="history-score">
+                    Inn 1: {r1.runs}/{r1.wickets} | Inn 2: {r2.runs}/{r2.wickets}
+                  </div>
+                </div>
+
+                <div className="history-item-actions">
+                  <button
+                    className={`icon-btn-text ${m.isPinned ? 'pinned-active' : 'ghost-subtle'}`}
+                    title={m.isPinned ? 'Unpin Match' : 'Pin Match to Top'}
+                    onClick={() => onTogglePin(m.id)}
+                  >
+                    <Pin size={14} /> {m.isPinned ? 'Pinned' : 'Pin'}
+                  </button>
+                  {isOngoing && (
+                    <button className="icon-btn-text primary-btn" title="Resume Live Scoring" onClick={() => onResume(m)}>
+                      <Play size={14} /> Resume
+                    </button>
+                  )}
+                  <button
+                    className="icon-btn-text primary-subtle"
+                    title="Export PDF Scorecard"
+                    onClick={() => printMatchPdf(m)}
+                  >
+                    <Printer size={14} /> PDF
+                  </button>
+                  <button
+                    className="icon-btn-text ghost-subtle"
+                    title="Share Scorecard"
+                    onClick={() => shareMatchScorecard(m, onFlash)}
+                  >
+                    <Share2 size={14} /> Share
+                  </button>
+                  <button
+                    className="icon-btn-text danger-subtle"
+                    title="Delete Match"
+                    onClick={() => onDelete(m.id)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
-        <div className="setting">
-          <div>
-            <strong>Data Storage</strong>
-            <small>Matches are saved securely on this device via IndexedDB</small>
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button className="toggle" onClick={exportCurrent}><Download size={16} /> Export JSON</button>
-            <label className="toggle" style={{ cursor: 'pointer' }}>
-              <Download size={16} /> Import JSON
-              <input type="file" accept="application/json" hidden onChange={e => { const file = e.target.files?.[0]; if (file) importMatch(file) }} />
-            </label>
+      )}
+
+      {/* Clear All History Confirmation Dialog */}
+      {clearConfirmOpen && (
+        <div className="dialog-backdrop">
+          <div className="dialog text-center">
+            <div className="trophy-badge" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
+              <Trash2 size={36} />
+            </div>
+            <h2 style={{ fontSize: 22, margin: '16px 0 8px', color: '#ef4444' }}>Clear All Match History?</h2>
+            <p className="setup-copy" style={{ margin: '0 0 20px' }}>
+              Are you sure you want to delete <strong>all saved matches</strong> from history? This action cannot be undone.
+            </p>
+            <div className="dialog-actions" style={{ justifyContent: 'center', gap: 12 }}>
+              <button className="ghost" onClick={() => setClearConfirmOpen(false)}>Cancel</button>
+              <button
+                className="danger-btn large"
+                onClick={() => {
+                  onClearAll()
+                  setClearConfirmOpen(false)
+                }}
+              >
+                Yes, Clear All Matches
+              </button>
+            </div>
           </div>
         </div>
-      </section>
+      )}
     </div>
   )
 }
@@ -1597,6 +2338,7 @@ function SettingsView({ dark, setDark, importMatch, exportCurrent }: { dark: boo
 function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) => void; onClose?: () => void }) {
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1)
   const [draft, setDraft] = useState<Match>(match)
+  const [oversInput, setOversInput] = useState<string>(String(match.overs))
 
   const [tossCaller, setTossCaller] = useState<0 | 1>(0)
   const [tossCall, setTossCall] = useState<'Heads' | 'Tails'>('Heads')
@@ -1605,6 +2347,19 @@ function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) 
   const [tossWinnerIndex, setTossWinnerIndex] = useState<0 | 1 | null>(null)
   const [tossDecision, setTossDecision] = useState<'bat' | 'bowl' | null>(null)
   const [coinRotation, setCoinRotation] = useState(0)
+
+  const handleOversChange = (val: string) => {
+    setOversInput(val)
+    const parsed = parseInt(val, 10)
+    if (!isNaN(parsed) && parsed > 0 && parsed <= 200) {
+      setDraft(m => ({ ...m, overs: parsed }))
+    }
+  }
+
+  const handlePresetOvers = (num: number) => {
+    setOversInput(String(num))
+    setDraft(m => ({ ...m, overs: num }))
+  }
 
   const updateTeamName = (index: 0 | 1, name: string) => {
     setDraft(m => ({
@@ -1710,7 +2465,7 @@ function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) 
             </div>
           </div>
           {onClose && (
-            <button className="icon-btn" onClick={onClose}><X size={20} /></button>
+            <button className="icon-btn" aria-label="Close setup modal" onClick={onClose}><X size={20} /></button>
           )}
         </div>
 
@@ -1763,7 +2518,15 @@ function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) 
               </label>
               <label>
                 Match Format
-                <select value={draft.matchType} onChange={e => setDraft({ ...draft, matchType: e.target.value })}>
+                <select value={draft.matchType} onChange={e => {
+                  const format = e.target.value
+                  let defaultOvers = draft.overs
+                  if (format === 'T20 Match') defaultOvers = 20
+                  else if (format === 'ODI (50 Overs)') defaultOvers = 50
+                  else if (format === '10-Over Sprint') defaultOvers = 10
+                  setDraft({ ...draft, matchType: format, overs: defaultOvers })
+                  setOversInput(String(defaultOvers))
+                }}>
                   <option>T20 Match</option>
                   <option>ODI (50 Overs)</option>
                   <option>10-Over Sprint</option>
@@ -1771,10 +2534,38 @@ function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) 
                   <option>Custom Match</option>
                 </select>
               </label>
-              <label>
-                Overs Limit
-                <input type="number" min="1" max="100" value={draft.overs} onChange={e => setDraft({ ...draft, overs: Math.max(1, Number(e.target.value)) })} />
-              </label>
+              <div className="overs-input-group">
+                <label>
+                  Overs Limit (Write manually or pick preset)
+                  <input
+                    type="number"
+                    min="1"
+                    max="200"
+                    value={oversInput}
+                    onChange={e => handleOversChange(e.target.value)}
+                    onBlur={() => {
+                      const parsed = parseInt(oversInput, 10)
+                      if (isNaN(parsed) || parsed < 1) {
+                        setOversInput('20')
+                        setDraft(m => ({ ...m, overs: 20 }))
+                      }
+                    }}
+                    placeholder="Enter overs count"
+                  />
+                </label>
+                <div className="preset-chips">
+                  {[5, 10, 15, 20, 50].map(num => (
+                    <button
+                      key={num}
+                      type="button"
+                      className={`chip ${draft.overs === num ? 'active' : ''}`}
+                      onClick={() => handlePresetOvers(num)}
+                    >
+                      {num} Ov {num === 20 ? '(T20)' : num === 50 ? '(ODI)' : ''}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             {/* Custom Rules Options */}
@@ -2024,10 +2815,19 @@ function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) 
 
         {/* Wizard Action Footer */}
         <div className="setup-footer">
-          <div>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             {step > 1 && (
               <button className="ghost" onClick={() => setStep(s => (s - 1) as 1 | 2 | 3 | 4)}>
                 <ChevronLeft size={16} /> Back
+              </button>
+            )}
+            {onClose && (
+              <button
+                className="ghost"
+                onClick={onClose}
+                style={{ color: 'var(--red)', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+              >
+                <X size={16} /> Cancel Setup
               </button>
             )}
           </div>
@@ -2061,7 +2861,7 @@ function Setup({ match, onStart, onClose }: { match: Match; onStart: (m: Match) 
 }
 
 /* Dialog to Select Opening Batters & Bowler at Innings Start */
-function SelectOpenersDialog({ match, battingTeam, bowlingTeam, onConfirm }: { match: Match; battingTeam: Team; bowlingTeam: Team; onConfirm: (striker: string, nonStriker: string, bowler: string) => void }) {
+function SelectOpenersDialog({ match, battingTeam, bowlingTeam, onConfirm, onClose }: { match: Match; battingTeam: Team; bowlingTeam: Team; onConfirm: (striker: string, nonStriker: string, bowler: string) => void; onClose?: () => void }) {
   const [striker, setStriker] = useState(battingTeam.players[0]?.id ?? '')
   const [nonStriker, setNonStriker] = useState(battingTeam.players[1]?.id ?? '')
   const [bowler, setBowler] = useState(bowlingTeam.players[0]?.id ?? '')
@@ -2076,6 +2876,9 @@ function SelectOpenersDialog({ match, battingTeam, bowlingTeam, onConfirm }: { m
             <p className="eyebrow">INNINGS {match.currentInnings} INITIAL SETUP</p>
             <h2>Select Opening Players</h2>
           </div>
+          {onClose && (
+            <button className="icon-btn" aria-label="Close dialog" onClick={onClose}><X size={18} /></button>
+          )}
         </div>
         <p className="setup-copy" style={{ margin: '0 0 16px' }}>
           Choose the Striker, Non-Striker for <strong>{battingTeam.name}</strong>, and Opening Bowler for <strong>{bowlingTeam.name}</strong>.
@@ -2111,6 +2914,11 @@ function SelectOpenersDialog({ match, battingTeam, bowlingTeam, onConfirm }: { m
         </label>
 
         <div className="dialog-actions">
+          {onClose && (
+            <button className="ghost" onClick={onClose}>
+              <X size={16} /> Cancel & Go Home
+            </button>
+          )}
           <button className="primary large" disabled={!isValid} onClick={() => onConfirm(striker, nonStriker, bowler)}>
             Confirm & Start Innings <ChevronRight size={18} />
           </button>
@@ -2121,7 +2929,7 @@ function SelectOpenersDialog({ match, battingTeam, bowlingTeam, onConfirm }: { m
 }
 
 /* Dialog to Select Next Bowler after an Over ends */
-function SelectBowlerDialog({ bowlingTeam, currentBowlerId, overNumber, onConfirm }: { bowlingTeam: Team; currentBowlerId?: string; overNumber: number; onConfirm: (bowlerId: string) => void }) {
+function SelectBowlerDialog({ bowlingTeam, currentBowlerId, overNumber, onConfirm, onClose }: { bowlingTeam: Team; currentBowlerId?: string; overNumber: number; onConfirm: (bowlerId: string) => void; onClose?: () => void }) {
   const [selected, setSelected] = useState(bowlingTeam.players.find(p => p.id !== currentBowlerId)?.id ?? bowlingTeam.players[0]?.id ?? '')
 
   return (
@@ -2132,6 +2940,9 @@ function SelectBowlerDialog({ bowlingTeam, currentBowlerId, overNumber, onConfir
             <p className="eyebrow">OVER COMPLETED</p>
             <h2>Select Bowler for Over {overNumber}</h2>
           </div>
+          {onClose && (
+            <button className="icon-btn" aria-label="Close dialog" onClick={onClose}><X size={18} /></button>
+          )}
         </div>
         <p className="setup-copy" style={{ margin: '0 0 16px' }}>
           Over {overNumber - 1} is finished! Select the player coming in to bowl Over {overNumber} for <strong>{bowlingTeam.name}</strong>.
@@ -2149,6 +2960,9 @@ function SelectBowlerDialog({ bowlingTeam, currentBowlerId, overNumber, onConfir
         </label>
 
         <div className="dialog-actions">
+          {onClose && (
+            <button className="ghost" onClick={onClose}>Cancel</button>
+          )}
           <button className="primary" onClick={() => onConfirm(selected)}>
             Confirm Bowler <Check size={16} />
           </button>
@@ -2159,10 +2973,15 @@ function SelectBowlerDialog({ bowlingTeam, currentBowlerId, overNumber, onConfir
 }
 
 /* Dialog showing 1st Innings Score & Target before starting 2nd Innings */
-function Innings1SummaryDialog({ snap1, battingTeam, bowlingTeam, target, overs, onStartInnings2 }: { snap1: Snapshot; battingTeam: Team; bowlingTeam: Team; target: number; overs: number; onStartInnings2: () => void }) {
+function Innings1SummaryDialog({ snap1, battingTeam, bowlingTeam, target, overs, onStartInnings2, onClose }: { snap1: Snapshot; battingTeam: Team; bowlingTeam: Team; target: number; overs: number; onStartInnings2: () => void; onClose?: () => void }) {
   return (
     <div className="dialog-backdrop">
-      <div className="dialog large-dialog text-center">
+      <div className="dialog large-dialog text-center" style={{ position: 'relative' }}>
+        {onClose && (
+          <button className="icon-btn" aria-label="Close dialog" onClick={onClose} style={{ position: 'absolute', top: 20, right: 20 }}>
+            <X size={18} />
+          </button>
+        )}
         <div className="trophy-badge"><Flame size={32} /></div>
         <p className="eyebrow" style={{ marginTop: 12 }}>1ST INNINGS COMPLETED</p>
         <h2 style={{ fontSize: 26, margin: '4px 0 12px' }}>{battingTeam.name} Innings Finished</h2>
@@ -2178,7 +2997,10 @@ function Innings1SummaryDialog({ snap1, battingTeam, bowlingTeam, target, overs,
           <small>Need {target} runs from {overs * 6} balls to win</small>
         </div>
 
-        <div className="dialog-actions" style={{ justifyContent: 'center', marginTop: 24 }}>
+        <div className="dialog-actions" style={{ justifyContent: 'center', gap: 12, marginTop: 24 }}>
+          {onClose && (
+            <button className="ghost" onClick={onClose}>View Scorecard</button>
+          )}
           <button className="primary large" onClick={onStartInnings2}>
             Start 2nd Innings Scoring <ChevronRight size={18} />
           </button>
@@ -2335,12 +3157,32 @@ function EditDialog({ delivery, onClose, onSave }: { delivery: Delivery; onClose
   )
 }
 
+function SafeApp() {
+  try {
+    return <App />
+  } catch (err) {
+    console.error("ScoreMaster Render Error:", err)
+    return (
+      <div style={{ padding: 40, textAlign: 'center', fontFamily: 'sans-serif', background: '#091324', color: '#fff', minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+        <h2 style={{ fontSize: 24, marginBottom: 12 }}>ScoreMaster</h2>
+        <p style={{ color: '#94a3b8', maxWidth: 460, marginBottom: 24 }}>App loaded. Click below to refresh local state.</p>
+        <button
+          onClick={() => { localStorage.clear(); window.location.reload() }}
+          style={{ background: '#0284c7', color: '#fff', border: 0, padding: '12px 24px', borderRadius: 10, cursor: 'pointer', fontWeight: 700 }}
+        >
+          Reset Local Cache & Reload
+        </button>
+      </div>
+    )
+  }
+}
+
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => undefined))
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <SafeApp />
   </StrictMode>
 )
